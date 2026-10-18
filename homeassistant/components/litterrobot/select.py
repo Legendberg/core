@@ -19,6 +19,30 @@ PARALLEL_UPDATES = 1
 
 _CastTypeT = TypeVar("_CastTypeT", int, float, str)
 
+# The LR5 LED does not necessarily render an arbitrary RGB value as the same
+# color at every brightness level (a firmware quirk). These presets are verified
+# on hardware to render true at all brightness levels and are offered as
+# known-good options while the light's RGB picker stays available for custom
+# colors.
+NIGHT_LIGHT_PRESETS: dict[str, tuple[int, int, int]] = {
+    "red": (255, 0, 0),
+    "green": (0, 255, 0),
+    "blue": (0, 0, 255),
+    "cyan": (0, 255, 255),
+    "magenta": (255, 0, 255),
+    "yellow": (255, 255, 0),
+    "white": (255, 255, 255),
+}
+
+
+def _active_night_light_preset(robot: LitterRobot5) -> str | None:
+    """Return the preset matching the current color, or None for a custom color."""
+    if (rgb := robot.night_light_rgb_color) is None:
+        return None
+    return next(
+        (name for name, value in NIGHT_LIGHT_PRESETS.items() if value == rgb), None
+    )
+
 
 @dataclass(frozen=True, kw_only=True)
 class RobotSelectEntityDescription(
@@ -96,6 +120,20 @@ ROBOT_SELECT_MAP: dict[
                 lambda robot, opt: robot.set_panel_brightness(
                     BrightnessLevel[opt.upper()]
                 )
+            ),
+        ),
+    ),
+    LitterRobot5: (
+        RobotSelectEntityDescription[LitterRobot5, str](
+            key="night_light_preset",
+            translation_key="night_light_preset",
+            current_fn=_active_night_light_preset,
+            options_fn=lambda _: list(NIGHT_LIGHT_PRESETS),
+            select_fn=lambda robot, opt: robot.set_night_light_settings(
+                # The API replaces the whole object, so keep mode + brightness.
+                mode=robot.night_light_mode or NightLightMode.ON,
+                brightness=robot.night_light_brightness,
+                color=NIGHT_LIGHT_PRESETS[opt],
             ),
         ),
     ),
