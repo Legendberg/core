@@ -316,6 +316,12 @@
       "message": "Unable to update {entity_id}"
     }
   },
+  "issues": {
+    "deprecated_globe_brightness": {
+      "title": "Globe brightness select is deprecated",
+      "description": "The Litter-Robot 5 **Globe brightness** select (`{entity_id}`) is deprecated and will be removed in Home Assistant 2027.5.0.\n\nThe **Night light** entity sets the globe's brightness anywhere from 0 to 100 %, which the select's three levels can't. Update any automations, scripts or dashboards that use `{entity_id}` to use the **Night light** entity instead, then disable the select. This issue goes away after the next restart."
+    }
+  },
   "services": {
     "set_sleep_mode": {
       "description": "Sets the sleep mode and start time.",

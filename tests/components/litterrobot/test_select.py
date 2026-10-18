@@ -6,6 +6,7 @@ from pylitterbot import LitterRobot3, LitterRobot4, LitterRobot5
 from pylitterbot.robot.litterrobot4 import NightLightMode
 import pytest
 
+from homeassistant.components.litterrobot.const import DOMAIN
 from homeassistant.components.select import (
     ATTR_OPTION,
     ATTR_OPTIONS,
@@ -15,11 +16,29 @@ from homeassistant.components.select import (
 from homeassistant.const import ATTR_ENTITY_ID, STATE_UNKNOWN, EntityCategory
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
-from homeassistant.helpers import entity_registry as er
+from homeassistant.helpers import entity_registry as er, issue_registry as ir
 
 from .conftest import create_mock_account, setup_integration
 
 SELECT_ENTITY_ID = "select.test_clean_cycle_wait_time_minutes"
+
+GLOBE_BRIGHTNESS_ENTITY_ID = "select.test_globe_brightness"
+LR5_GLOBE_BRIGHTNESS_UNIQUE_ID = "LR5C010001-globe_brightness"
+LR5_GLOBE_BRIGHTNESS_ISSUE_ID = "deprecated_globe_brightness_LR5C010001"
+
+
+def _register_lr5_globe_brightness(
+    entity_registry: er.EntityRegistry,
+    disabled_by: er.RegistryEntryDisabler | None = None,
+) -> None:
+    """Register the entity as it would exist for a user who already had it."""
+    entity_registry.async_get_or_create(
+        SELECT_DOMAIN,
+        DOMAIN,
+        LR5_GLOBE_BRIGHTNESS_UNIQUE_ID,
+        suggested_object_id="test_globe_brightness",
+        disabled_by=disabled_by,
+    )
 
 
 async def test_wait_time_select(
@@ -204,7 +223,9 @@ async def test_litterrobot_5_panel_brightness(
         assert robot.set_panel_brightness.call_count == count + 1
 
 
-async def test_globe_brightness_unmapped_level(hass: HomeAssistant) -> None:
+async def test_globe_brightness_unmapped_level(
+    hass: HomeAssistant, entity_registry: er.EntityRegistry
+) -> None:
     """A brightness matching no level leaves the select unknown, not "None".
 
     The LR5 firmware accepts any 0-100 brightness, so a value set outside the
@@ -221,8 +242,105 @@ async def test_globe_brightness_unmapped_level(hass: HomeAssistant) -> None:
         },
         v5=True,
     )
+    # a deprecated entity is only kept for users who already have it
+    _register_lr5_globe_brightness(entity_registry)
     await setup_integration(hass, mock_account, SELECT_DOMAIN)
 
-    select = hass.states.get("select.test_globe_brightness")
+    select = hass.states.get(GLOBE_BRIGHTNESS_ENTITY_ID)
     assert select
     assert select.state == STATE_UNKNOWN
+
+
+async def test_litterrobot_5_globe_brightness_not_created_for_new_installs(
+    hass: HomeAssistant,
+    mock_account_with_litterrobot_5: MagicMock,
+    entity_registry: er.EntityRegistry,
+) -> None:
+    """A Litter-Robot 5 that never had the deprecated select doesn't get it."""
+    await setup_integration(hass, mock_account_with_litterrobot_5, SELECT_DOMAIN)
+
+    assert hass.states.get(GLOBE_BRIGHTNESS_ENTITY_ID) is None
+    assert (
+        entity_registry.async_get_entity_id(
+            SELECT_DOMAIN, DOMAIN, LR5_GLOBE_BRIGHTNESS_UNIQUE_ID
+        )
+        is None
+    )
+    assert (
+        ir.async_get(hass).async_get_issue(DOMAIN, LR5_GLOBE_BRIGHTNESS_ISSUE_ID)
+        is None
+    )
+    # its siblings are unaffected
+    assert hass.states.get("select.test_globe_light")
+    assert hass.states.get("select.test_panel_brightness")
+
+
+async def test_litterrobot_5_globe_brightness_kept_with_repair_issue(
+    hass: HomeAssistant,
+    mock_account_with_litterrobot_5: MagicMock,
+    entity_registry: er.EntityRegistry,
+) -> None:
+    """An existing, enabled select stays and raises a deprecation issue."""
+    _register_lr5_globe_brightness(entity_registry)
+    await setup_integration(hass, mock_account_with_litterrobot_5, SELECT_DOMAIN)
+
+    assert hass.states.get(GLOBE_BRIGHTNESS_ENTITY_ID)
+
+    issue = ir.async_get(hass).async_get_issue(DOMAIN, LR5_GLOBE_BRIGHTNESS_ISSUE_ID)
+    assert issue
+    assert issue.translation_key == "deprecated_globe_brightness"
+    assert issue.severity is ir.IssueSeverity.WARNING
+    assert issue.breaks_in_ha_version == "2027.5.0"
+    assert issue.translation_placeholders == {"entity_id": GLOBE_BRIGHTNESS_ENTITY_ID}
+    assert not issue.is_fixable
+
+
+async def test_litterrobot_5_globe_brightness_removed_when_disabled(
+    hass: HomeAssistant,
+    mock_account_with_litterrobot_5: MagicMock,
+    entity_registry: er.EntityRegistry,
+) -> None:
+    """Disabling the deprecated select removes it and clears its issue."""
+    _register_lr5_globe_brightness(
+        entity_registry, disabled_by=er.RegistryEntryDisabler.USER
+    )
+    # as left behind by an earlier run, while it was still enabled
+    ir.async_create_issue(
+        hass,
+        DOMAIN,
+        LR5_GLOBE_BRIGHTNESS_ISSUE_ID,
+        is_fixable=False,
+        severity=ir.IssueSeverity.WARNING,
+        translation_key="deprecated_globe_brightness",
+        translation_placeholders={"entity_id": GLOBE_BRIGHTNESS_ENTITY_ID},
+    )
+
+    await setup_integration(hass, mock_account_with_litterrobot_5, SELECT_DOMAIN)
+
+    assert hass.states.get(GLOBE_BRIGHTNESS_ENTITY_ID) is None
+    assert (
+        entity_registry.async_get_entity_id(
+            SELECT_DOMAIN, DOMAIN, LR5_GLOBE_BRIGHTNESS_UNIQUE_ID
+        )
+        is None
+    )
+    assert (
+        ir.async_get(hass).async_get_issue(DOMAIN, LR5_GLOBE_BRIGHTNESS_ISSUE_ID)
+        is None
+    )
+
+
+async def test_litterrobot_4_globe_brightness_is_not_deprecated(
+    hass: HomeAssistant, mock_account_with_litterrobot_4: MagicMock
+) -> None:
+    """The deprecation is Litter-Robot 5 only; the LR4 select is untouched."""
+    await setup_integration(hass, mock_account_with_litterrobot_4, SELECT_DOMAIN)
+
+    assert hass.states.get(GLOBE_BRIGHTNESS_ENTITY_ID)
+    assert (
+        ir.async_get(hass).async_get_issue(
+            DOMAIN, "deprecated_globe_brightness_LR4C010001"
+        )
+        is None
+    )
+    assert not ir.async_get(hass).issues
